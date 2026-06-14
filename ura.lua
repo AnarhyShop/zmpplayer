@@ -1,18 +1,17 @@
-local repo = "AnarhyShop/zmpplayer"
-
-local response = http.get("https://api.github.com/repos/" .. repo .. "/contents")
-if not response then
-    error("Не удалось получить список файлов")
+for i = 1, 27 do
+    shell.run("wget",
+        "https://raw.githubusercontent.com/AnarhyShop/zmpplayer/main/"..i..".dfpwm",
+        i..".dfpwm")
 end
 
-local files = textutils.unserializeJSON(response.readAll())
-response.close()
+shell.run("wget",
+    "https://raw.githubusercontent.com/AnarhyShop/zmpplayer/main/play.lua",
+    "play.lua")
 
-for _, file in ipairs(files) do
-    if file.name:match("%.dfpwm$") then
-        print("Скачиваю " .. file.name)
-        shell.run("wget", file.download_url, file.name)
-    end
-end
+shell.run("wget",
+    "https://raw.githubusercontent.com/AnarhyShop/zmpplayer/main/gui_play.lua",
+    "gui_play.lua")
 
-print("Готово!")
+shell.run("wget",
+    "https://raw.githubusercontent.com/AnarhyShop/zmpplayer/main/make_disk.lua",
+    "make_disk.lua")

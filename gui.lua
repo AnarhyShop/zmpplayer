@@ -16,14 +16,12 @@ if #speakers == 0 then
     return
 end
 
-local args = {...}
 local baseUrl = "https://raw.githubusercontent.com/AnarhyShop/zmpplayer/main/"
 
 local playlist = {}
 for i = 1, 27 do
     playlist[#playlist + 1] = i .. ".dfpwm"
 end
-
 
 -- State variables
 local currentSongIdx = 1
@@ -190,7 +188,6 @@ local function uiLoop()
         elseif event == "mouse_click" then
             local x, y = eventData[3], eventData[4]
             if w < 34 then
-                -- Pocket Computer hitboxes
                 if y == 11 then
                     if x >= 2 and x <= 15 then 
                         isPaused = not isPaused; isPlaying = true; needRedraw = true
@@ -211,7 +208,6 @@ local function uiLoop()
                     exitProgram = true; stopAllSpeakers()
                 end
             else
-                -- Normal hitboxes
                 if y == 11 then
                     if x >= 2 and x <= 15 then 
                         isPaused = not isPaused; isPlaying = true; needRedraw = true
@@ -240,9 +236,7 @@ local function sendToSpeaker(spk, buffer, vol)
         local ok, res = pcall(spk.playAudio, buffer, vol)
         if not ok then
             volume_supported = false
-            -- Fallback to no volume argument
             local ok2, res2 = pcall(spk.playAudio, buffer)
-            -- If it still errors, return true to pretend it succeeded so we don't deadlock
             if ok2 then return res2 else return true end
         end
         return res
@@ -280,7 +274,6 @@ local function playAudioChunk(buffer)
                     os.cancelTimer(timer)
                     break
                 elseif ev == "timer" and eventData[2] == timer then
-                    -- Timeout reached!
                     return
                 end
                 
@@ -302,19 +295,19 @@ local function audioLoop()
             if file then
                 local decoder = dfpwm.make_decoder()
                 stopAllSpeakers()
-                sleep(0.3) -- Increased sleep to fix client-side OpenAL duplication bug
+                sleep(0.1) 
                 
                 while not exitProgram and not skipSong and isPlaying do
                     if isPaused then
                         sleep(0.1)
                     else
                         if justUnpaused then
-                            sleep(0.3) -- Give client time to reset audio buffer
+                            sleep(0.1) -- Уменьшил задержку, чтобы стартовало бодрее
                             justUnpaused = false
                         end
                         
-                        -- 16KB chunks to prevent audio stuttering/muffling (CC requires large chunks)
-                        local chunk = file.read(16 * 1024) 
+                        -- ИСПРАВЛЕНИЕ: Читаем по 4 КБ (4096). Это уберет эффект промотки!
+                        local chunk = file.read(4096) 
                         if not chunk or chunk == "" then break end
                         
                         local buffer = decoder(chunk)
@@ -333,13 +326,11 @@ local function audioLoop()
                 skipSong = false
                 needRedraw = true
             elseif not isPlaying then
-                -- Stopped
                 while not isPlaying and not exitProgram and not skipSong do
                     sleep(0.1)
                 end
             elseif not isPaused then
-                -- Finished naturally
-                sleep(1.0)
+                sleep(0.5)
                 currentSongIdx = currentSongIdx + 1
                 if currentSongIdx > #playlist then currentSongIdx = 1 end
                 needRedraw = true

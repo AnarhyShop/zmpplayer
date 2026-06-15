@@ -16,13 +16,60 @@ if #speakers == 0 then
     return
 end
 
-local args = {...}
+-- ==========================================
+-- УМНАЯ ЗАГРУЗКА ПЛЕЙЛИСТА ЧЕРЕЗ GITHUB API
+-- ==========================================
 local baseUrl = "https://raw.githubusercontent.com/AnarhyShop/zmpplayer/main/"
-
 local playlist = {}
-for i = 1, 27 do
-    playlist[#playlist + 1] = i .. ".dfpwm"
+
+term.clear()
+term.setCursorPos(1, 1)
+term.setTextColor(colors.yellow)
+print("Connecting to GitHub API...")
+print("Scanning playlist 'zmpplayer'...")
+
+local apiRes = http.get("https://api.github.com/repos/AnarhyShop/zmpplayer/contents/", {["User-Agent"]="CC-MusicPlayer"})
+if apiRes then
+    local data = textutils.unserializeJSON(apiRes.readAll())
+    apiRes.close()
+    if type(data) == "table" then
+        for _, item in ipairs(data) do
+            if item.type == "file" and item.name:match("%.dfpwm$") then
+                table.insert(playlist, item.name)
+            end
+        end
+    end
 end
+
+-- Если API GitHub не ответил (например, лимит запросов), используем резерв
+if #playlist == 0 then
+    term.setTextColor(colors.red)
+    print("API limit reached or error. Using fallback (1-27)...")
+    for i = 1, 27 do playlist[#playlist + 1] = i .. ".dfpwm" end
+    os.sleep(2)
+end
+
+-- Умная сортировка: "10" должно идти после "9", а не после "1"
+table.sort(playlist, function(a, b)
+    local numA = tonumber(a:match("%d+"))
+    local numB = tonumber(b:match("%d+"))
+    -- Если оба файла имеют номера, сортируем по номерам
+    if numA and numB then 
+        if numA ~= numB then return numA < numB end
+    -- Если только один имеет номер, он идет в конец
+    elseif numA then return false
+    elseif numB then return true end
+    -- Если номеров нет, сортируем по алфавиту
+    return a < b
+end)
+
+term.setTextColor(colors.lime)
+print("Loaded " .. #playlist .. " tracks!")
+os.sleep(1)
+
+-- ==========================================
+-- ЯДРО ПЛЕЕРА И GUI
+-- ==========================================
 
 -- State variables
 local currentSongIdx = 1
@@ -30,23 +77,18 @@ local isPlaying = true
 local isPaused = false
 local volume = 1.0
 local exitProgram = false
-local skipSong = false
+local trackChanged = false
 local needRedraw = true
 local volume_supported = true
 local justUnpaused = false
+local playlistOffset = 1
 
 local w, h = term.getSize()
-
--- СИСТЕМА СИНХРОНИЗАЦИИ КОЛОНОК
-local master_speaker = peripheral.getName(speakers[1])
-local queued_chunks = 0
-local max_queue = 2 -- Держим буфер коротким (2 куска), чтобы колонки не задыхались
 
 local function stopAllSpeakers()
     for _, spk in ipairs(speakers) do
         pcall(spk.stop)
     end
-    queued_chunks = 0 -- Обязательно сбрасываем счетчик при паузе/стопе!
 end
 
 local function drawUI()
@@ -79,7 +121,7 @@ local function drawUI()
     term.setCursorPos(2, 7)
     term.setTextColor(colors.yellow)
     local songName = playlist[currentSongIdx] or ""
-    if #songName > w - 4 then songName = songName:sub(1, w - 7) .. "..." end
+    if #songName > 24 then songName = songName:sub(1, 21) .. "..." end
     term.write(songName)
     
     -- Status
@@ -95,69 +137,91 @@ local function drawUI()
         term.write("[ PLAYING ]")
     end
     
-    -- Controls
+    -- Controls Layout
     term.setTextColor(colors.white)
     term.setCursorPos(2, 11)
+    term.setBackgroundColor(colors.green)
+    term.write(" [P]lay/Pause ")
+    term.setBackgroundColor(colors.black)
+    term.write(" ")
+    term.setBackgroundColor(colors.red)
+    term.write(" [S]top ")
     
-    if w < 34 then
-        -- Compact layout for Pocket Computer
-        term.setBackgroundColor(colors.green)
-        term.write(" [P]lay/Pause ")
+    term.setCursorPos(2, 12)
+    term.setBackgroundColor(colors.cyan)
+    term.write(" [B]ack ")
+    term.setBackgroundColor(colors.black)
+    term.write("       ")
+    term.setBackgroundColor(colors.blue)
+    term.write(" [N]ext ")
+    
+    term.setCursorPos(2, 14)
+    term.setBackgroundColor(colors.gray)
+    term.write(" [-] Vol ")
+    term.setBackgroundColor(colors.black)
+    term.write("       ")
+    term.setBackgroundColor(colors.lightGray)
+    term.setTextColor(colors.black)
+    term.write(" [+] Vol ")
+    
+    -- Интерактивный плейлист
+    if w >= 38 then
         term.setBackgroundColor(colors.black)
-        term.write(" ")
+        term.setTextColor(colors.gray)
+        for r = 2, h do
+            term.setCursorPos(28, r)
+            term.write("|")
+        end
         
-        term.setBackgroundColor(colors.red)
-        term.write(" [S]top ")
-        
-        term.setCursorPos(2, 13)
-        term.setBackgroundColor(colors.cyan)
-        term.write(" [N]ext ")
-        
-        term.setCursorPos(2, 15)
+        term.setCursorPos(w - 4, 2)
         term.setBackgroundColor(colors.gray)
-        term.write(" [-] Vol ")
-        term.setBackgroundColor(colors.black)
-        term.write(" ")
+        term.setTextColor(colors.white)
+        term.write(" [^] ")
         
-        term.setBackgroundColor(colors.lightGray)
-        term.setTextColor(colors.black)
-        term.write(" [+] Vol ")
-    else
-        -- Normal layout
-        term.setBackgroundColor(colors.green)
-        term.write(" [P]lay/Pause ")
-        term.setBackgroundColor(colors.black)
-        term.write("  ")
-        
-        term.setBackgroundColor(colors.red)
-        term.write(" [S]top ")
-        term.setBackgroundColor(colors.black)
-        term.write("  ")
-        
-        term.setBackgroundColor(colors.cyan)
-        term.write(" [N]ext ")
-        
-        term.setCursorPos(2, 13)
+        term.setCursorPos(w - 4, h - 1)
         term.setBackgroundColor(colors.gray)
-        term.write(" [-] Vol ")
-        term.setBackgroundColor(colors.black)
-        term.write("  ")
+        term.setTextColor(colors.white)
+        term.write(" [v] ")
         
-        term.setBackgroundColor(colors.lightGray)
-        term.setTextColor(colors.black)
-        term.write(" [+] Vol ")
+        local visibleRows = h - 4
+        term.setBackgroundColor(colors.black)
+        for i = 0, visibleRows - 1 do
+            local songIdx = playlistOffset + i
+            if songIdx <= #playlist then
+                local row = 3 + i
+                term.setCursorPos(30, row)
+                local displayName = playlist[songIdx]:sub(1, w - 36)
+                if songIdx == currentSongIdx then
+                    term.setTextColor(colors.lime)
+                    term.write(string.format("> %02d. %s", songIdx, displayName))
+                else
+                    term.setTextColor(colors.white)
+                    term.write(string.format("  %02d. %s", songIdx, displayName))
+                end
+            end
+        end
     end
     
     -- Quit
-    term.setCursorPos(w - 9, h)
+    term.setCursorPos(2, h)
     term.setBackgroundColor(colors.red)
     term.setTextColor(colors.white)
     term.write(" [Q]uit ")
 
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
-    
     needRedraw = false
+end
+
+local function scrollPlaylist(dir)
+    local visibleRows = h - 4
+    local maxOffset = math.max(1, #playlist - visibleRows + 1)
+    if dir == "up" then
+        playlistOffset = math.max(1, playlistOffset - 1)
+    elseif dir == "down" then
+        playlistOffset = math.min(maxOffset, playlistOffset + 1)
+    end
+    needRedraw = true
 end
 
 local function uiLoop()
@@ -174,10 +238,20 @@ local function uiLoop()
                 stopAllSpeakers()
                 if not isPaused then justUnpaused = true end
             end
-            if key == keys.s then isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; stopAllSpeakers() end
-            if key == keys.n then skipSong = true; isPlaying = true; needRedraw = true; stopAllSpeakers() end
+            if key == keys.s then isPlaying = false; isPaused = false; trackChanged = true; needRedraw = true; stopAllSpeakers() end
+            if key == keys.n then 
+                currentSongIdx = (currentSongIdx % #playlist) + 1
+                trackChanged = true; isPlaying = true; isPaused = false; needRedraw = true; stopAllSpeakers() 
+            end
+            if key == keys.b then 
+                currentSongIdx = currentSongIdx - 1
+                if currentSongIdx < 1 then currentSongIdx = #playlist end
+                trackChanged = true; isPlaying = true; isPaused = false; needRedraw = true; stopAllSpeakers()
+            end
             if key == keys.minus then volume = math.max(0.0, volume - 0.1); needRedraw = true end
             if key == keys.equals or key == keys.plus then volume = math.min(3.0, volume + 0.1); needRedraw = true end
+            if key == keys.up then scrollPlaylist("up") end
+            if key == keys.down then scrollPlaylist("down") end
             
         elseif event == "char" then
             local char = string.lower(eventData[2])
@@ -187,51 +261,57 @@ local function uiLoop()
                 stopAllSpeakers()
                 if not isPaused then justUnpaused = true end
             end
-            if char == "s" then isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; stopAllSpeakers() end
-            if char == "n" then skipSong = true; isPlaying = true; needRedraw = true; stopAllSpeakers() end
+            if char == "s" then isPlaying = false; isPaused = false; trackChanged = true; needRedraw = true; stopAllSpeakers() end
+            if char == "n" then 
+                currentSongIdx = (currentSongIdx % #playlist) + 1
+                trackChanged = true; isPlaying = true; isPaused = false; needRedraw = true; stopAllSpeakers() 
+            end
+            if char == "b" then 
+                currentSongIdx = currentSongIdx - 1
+                if currentSongIdx < 1 then currentSongIdx = #playlist end
+                trackChanged = true; isPlaying = true; isPaused = false; needRedraw = true; stopAllSpeakers()
+            end
             if char == "-" then volume = math.max(0.0, volume - 0.1); needRedraw = true end
             if char == "+" or char == "=" then volume = math.min(3.0, volume + 0.1); needRedraw = true end
             
         elseif event == "mouse_click" then
             local x, y = eventData[3], eventData[4]
-            if w < 34 then
-                if y == 11 then
-                    if x >= 2 and x <= 15 then 
-                        isPaused = not isPaused; isPlaying = true; needRedraw = true
-                        stopAllSpeakers()
-                        if not isPaused then justUnpaused = true end
-                    end
-                    if x >= 17 and x <= 24 then 
-                        isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; stopAllSpeakers() 
-                    end
-                elseif y == 13 then
-                    if x >= 2 and x <= 9 then 
-                        skipSong = true; isPlaying = true; needRedraw = true; stopAllSpeakers() 
-                    end
-                elseif y == 15 then
-                    if x >= 2 and x <= 10 then volume = math.max(0.0, volume - 0.1); needRedraw = true end
-                    if x >= 12 and x <= 20 then volume = math.min(3.0, volume + 0.1); needRedraw = true end
-                elseif y == h and x >= w - 9 then
-                    exitProgram = true; stopAllSpeakers()
+            
+            if y == 11 then
+                if x >= 2 and x <= 15 then 
+                    isPaused = not isPaused; isPlaying = true; needRedraw = true
+                    stopAllSpeakers()
+                    if not isPaused then justUnpaused = true end
+                elseif x >= 17 and x <= 24 then 
+                    isPlaying = false; isPaused = false; trackChanged = true; needRedraw = true; stopAllSpeakers() 
                 end
-            else
-                if y == 11 then
-                    if x >= 2 and x <= 15 then 
-                        isPaused = not isPaused; isPlaying = true; needRedraw = true
-                        stopAllSpeakers()
-                        if not isPaused then justUnpaused = true end
+            elseif y == 12 then
+                if x >= 2 and x <= 9 then
+                    currentSongIdx = currentSongIdx - 1
+                    if currentSongIdx < 1 then currentSongIdx = #playlist end
+                    trackChanged = true; isPlaying = true; isPaused = false; needRedraw = true; stopAllSpeakers()
+                elseif x >= 17 and x <= 24 then
+                    currentSongIdx = (currentSongIdx % #playlist) + 1
+                    trackChanged = true; isPlaying = true; isPaused = false; needRedraw = true; stopAllSpeakers()
+                end
+            elseif y == 14 then
+                if x >= 2 and x <= 10 then volume = math.max(0.0, volume - 0.1); needRedraw = true
+                elseif x >= 17 and x <= 25 then volume = math.min(3.0, volume + 0.1); needRedraw = true end
+            elseif y == h and x >= 2 and x <= 9 then
+                exitProgram = true; stopAllSpeakers()
+            end
+            
+            if w >= 38 and x >= 30 then
+                if y == 2 and x >= w - 5 then
+                    scrollPlaylist("up")
+                elseif y == h - 1 and x >= w - 5 then
+                    scrollPlaylist("down")
+                elseif y >= 3 and y <= h - 2 then
+                    local clickedIdx = playlistOffset + (y - 3)
+                    if clickedIdx <= #playlist then
+                        currentSongIdx = clickedIdx
+                        trackChanged = true; isPlaying = true; isPaused = false; needRedraw = true; stopAllSpeakers()
                     end
-                    if x >= 18 and x <= 25 then 
-                        isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; stopAllSpeakers() 
-                    end
-                    if x >= 28 and x <= 35 then 
-                        skipSong = true; isPlaying = true; needRedraw = true; stopAllSpeakers() 
-                    end
-                elseif y == 13 then
-                    if x >= 2 and x <= 10 then volume = math.max(0.0, volume - 0.1); needRedraw = true end
-                    if x >= 13 and x <= 21 then volume = math.min(3.0, volume + 0.1); needRedraw = true end
-                elseif y == h and x >= w - 9 then
-                    exitProgram = true; stopAllSpeakers()
                 end
             end
         end
@@ -253,30 +333,44 @@ local function sendToSpeaker(spk, buffer, vol)
     end
 end
 
--- ИДЕАЛЬНО СИНХРОННАЯ ОТПРАВКА ВО ВСЕ КОЛОНКИ
 local function playAudioChunk(buffer)
-    if exitProgram or skipSong or isPaused then return end
-
-    -- Шаг 1: Ждем, пока у Главной колонки появится место в буфере
-    while queued_chunks >= max_queue do
-        local eventData = {os.pullEvent()}
-        local ev = eventData[1]
-        local param = eventData[2]
+    local accepted = {}
+    local success_count = 0
+    local current_vol = volume
+    
+    while success_count < #speakers do
+        if exitProgram or trackChanged or isPaused then return end
         
-        -- Как только Главная колонка освободилась, мы знаем, что и остальные готовы
-        if ev == "speaker_audio_empty" and param == master_speaker then
-            queued_chunks = queued_chunks - 1
+        for i, spk in ipairs(speakers) do
+            if not accepted[i] then
+                local res = sendToSpeaker(spk, buffer, current_vol)
+                if res then
+                    accepted[i] = true
+                    success_count = success_count + 1
+                end
+            end
         end
         
-        if exitProgram or skipSong or isPaused then return end
+        if success_count < #speakers then
+            local timer = os.startTimer(5.0)
+            while true do
+                local eventData = {os.pullEvent()}
+                local ev = eventData[1]
+                
+                if ev == "speaker_audio_empty" then
+                    os.cancelTimer(timer)
+                    break
+                elseif ev == "timer" and eventData[2] == timer then
+                    return
+                end
+                
+                if exitProgram or trackChanged or isPaused then
+                    os.cancelTimer(timer)
+                    return
+                end
+            end
+        end
     end
-    
-    -- Шаг 2: В одну и ту же миллисекунду отправляем звук во все 4 колонки
-    for _, spk in ipairs(speakers) do
-        sendToSpeaker(spk, buffer, volume)
-    end
-    
-    queued_chunks = queued_chunks + 1
 end
 
 local function audioLoop()
@@ -290,7 +384,7 @@ local function audioLoop()
                 stopAllSpeakers()
                 sleep(0.3)
                 
-                while not exitProgram and not skipSong and isPlaying do
+                while not exitProgram and not trackChanged and isPlaying do
                     if isPaused then
                         sleep(0.1)
                     else
@@ -299,7 +393,6 @@ local function audioLoop()
                             justUnpaused = false
                         end
                         
-                        -- Твой размер чанков (16KB) оставлен без изменений!
                         local chunk = file.read(16 * 1024) 
                         if not chunk or chunk == "" then break end
                         
@@ -312,14 +405,12 @@ local function audioLoop()
             
             if exitProgram then break end
             
-            if skipSong then
+            if trackChanged then
                 sleep(0.1)
-                currentSongIdx = currentSongIdx + 1
-                if currentSongIdx > #playlist then currentSongIdx = 1 end
-                skipSong = false
+                trackChanged = false
                 needRedraw = true
             elseif not isPlaying then
-                while not isPlaying and not exitProgram and not skipSong do
+                while not isPlaying and not exitProgram and not trackChanged do
                     sleep(0.1)
                 end
             elseif not isPaused then
@@ -336,7 +427,6 @@ local function audioLoop()
     stopAllSpeakers()
 end
 
-term.clear()
 parallel.waitForAny(uiLoop, audioLoop)
 
 term.setBackgroundColor(colors.black)

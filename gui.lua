@@ -24,7 +24,6 @@ for i = 1, 27 do
     playlist[#playlist + 1] = i .. ".dfpwm"
 end
 
-
 -- State variables
 local currentSongIdx = 1
 local isPlaying = true
@@ -38,10 +37,16 @@ local justUnpaused = false
 
 local w, h = term.getSize()
 
+-- СИСТЕМА СИНХРОНИЗАЦИИ КОЛОНОК
+local master_speaker = peripheral.getName(speakers[1])
+local queued_chunks = 0
+local max_queue = 2 -- Держим буфер коротким (2 куска), чтобы колонки не задыхались
+
 local function stopAllSpeakers()
     for _, spk in ipairs(speakers) do
         pcall(spk.stop)
     end
+    queued_chunks = 0 -- Обязательно сбрасываем счетчик при паузе/стопе!
 end
 
 local function drawUI()
@@ -190,7 +195,6 @@ local function uiLoop()
         elseif event == "mouse_click" then
             local x, y = eventData[3], eventData[4]
             if w < 34 then
-                -- Pocket Computer hitboxes
                 if y == 11 then
                     if x >= 2 and x <= 15 then 
                         isPaused = not isPaused; isPlaying = true; needRedraw = true
@@ -211,7 +215,6 @@ local function uiLoop()
                     exitProgram = true; stopAllSpeakers()
                 end
             else
-                -- Normal hitboxes
                 if y == 11 then
                     if x >= 2 and x <= 15 then 
                         isPaused = not isPaused; isPlaying = true; needRedraw = true
@@ -240,9 +243,7 @@ local function sendToSpeaker(spk, buffer, vol)
         local ok, res = pcall(spk.playAudio, buffer, vol)
         if not ok then
             volume_supported = false
-            -- Fallback to no volume argument
             local ok2, res2 = pcall(spk.playAudio, buffer)
-            -- If it still errors, return true to pretend it succeeded so we don't deadlock
             if ok2 then return res2 else return true end
         end
         return res
@@ -252,45 +253,30 @@ local function sendToSpeaker(spk, buffer, vol)
     end
 end
 
+-- ИДЕАЛЬНО СИНХРОННАЯ ОТПРАВКА ВО ВСЕ КОЛОНКИ
 local function playAudioChunk(buffer)
-    local accepted = {}
-    local success_count = 0
-    local current_vol = volume
-    
-    while success_count < #speakers do
+    if exitProgram or skipSong or isPaused then return end
+
+    -- Шаг 1: Ждем, пока у Главной колонки появится место в буфере
+    while queued_chunks >= max_queue do
+        local eventData = {os.pullEvent()}
+        local ev = eventData[1]
+        local param = eventData[2]
+        
+        -- Как только Главная колонка освободилась, мы знаем, что и остальные готовы
+        if ev == "speaker_audio_empty" and param == master_speaker then
+            queued_chunks = queued_chunks - 1
+        end
+        
         if exitProgram or skipSong or isPaused then return end
-        
-        for i, spk in ipairs(speakers) do
-            if not accepted[i] then
-                local res = sendToSpeaker(spk, buffer, current_vol)
-                if res then
-                    accepted[i] = true
-                    success_count = success_count + 1
-                end
-            end
-        end
-        
-        if success_count < #speakers then
-            local timer = os.startTimer(5.0)
-            while true do
-                local eventData = {os.pullEvent()}
-                local ev = eventData[1]
-                
-                if ev == "speaker_audio_empty" then
-                    os.cancelTimer(timer)
-                    break
-                elseif ev == "timer" and eventData[2] == timer then
-                    -- Timeout reached!
-                    return
-                end
-                
-                if exitProgram or skipSong or isPaused then
-                    os.cancelTimer(timer)
-                    return
-                end
-            end
-        end
     end
+    
+    -- Шаг 2: В одну и ту же миллисекунду отправляем звук во все 4 колонки
+    for _, spk in ipairs(speakers) do
+        sendToSpeaker(spk, buffer, volume)
+    end
+    
+    queued_chunks = queued_chunks + 1
 end
 
 local function audioLoop()
@@ -302,18 +288,18 @@ local function audioLoop()
             if file then
                 local decoder = dfpwm.make_decoder()
                 stopAllSpeakers()
-                sleep(0.3) -- Increased sleep to fix client-side OpenAL duplication bug
+                sleep(0.3)
                 
                 while not exitProgram and not skipSong and isPlaying do
                     if isPaused then
                         sleep(0.1)
                     else
                         if justUnpaused then
-                            sleep(0.3) -- Give client time to reset audio buffer
+                            sleep(0.3)
                             justUnpaused = false
                         end
                         
-                        -- 16KB chunks to prevent audio stuttering/muffling (CC requires large chunks)
+                        -- Твой размер чанков (16KB) оставлен без изменений!
                         local chunk = file.read(16 * 1024) 
                         if not chunk or chunk == "" then break end
                         
@@ -333,12 +319,10 @@ local function audioLoop()
                 skipSong = false
                 needRedraw = true
             elseif not isPlaying then
-                -- Stopped
                 while not isPlaying and not exitProgram and not skipSong do
                     sleep(0.1)
                 end
             elseif not isPaused then
-                -- Finished naturally
                 sleep(1.0)
                 currentSongIdx = currentSongIdx + 1
                 if currentSongIdx > #playlist then currentSongIdx = 1 end
@@ -352,11 +336,9 @@ local function audioLoop()
     stopAllSpeakers()
 end
 
--- Clear terminal and start
 term.clear()
 parallel.waitForAny(uiLoop, audioLoop)
 
--- Cleanup
 term.setBackgroundColor(colors.black)
 term.setTextColor(colors.white)
 term.clear()

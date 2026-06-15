@@ -16,6 +16,7 @@ if #speakers == 0 then
     return
 end
 
+local args = {...}
 local baseUrl = "https://raw.githubusercontent.com/AnarhyShop/zmpplayer/main/"
 
 local playlist = {}
@@ -32,20 +33,14 @@ local exitProgram = false
 local skipSong = false
 local needRedraw = true
 local volume_supported = true
-
--- Audio Sync trackers
-local queued_chunks = 0
-local chunk_timers = {}
+local justUnpaused = false
 
 local w, h = term.getSize()
 
--- Новая функция очистки, которая сбрасывает и колонки, и наши таймеры
-local function clearAudioQueue()
+local function stopAllSpeakers()
     for _, spk in ipairs(speakers) do
         pcall(spk.stop)
     end
-    queued_chunks = 0
-    chunk_timers = {}
 end
 
 local function drawUI()
@@ -53,6 +48,7 @@ local function drawUI()
     term.setBackgroundColor(colors.black)
     term.clear()
     
+    -- Title Bar
     term.setCursorPos(1, 1)
     term.setBackgroundColor(colors.blue)
     term.setTextColor(colors.white)
@@ -61,6 +57,7 @@ local function drawUI()
     term.setCursorPos(math.floor((w - #title)/2) + 1, 1)
     term.write(title)
     
+    -- Info
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.gray)
     term.setCursorPos(2, 3)
@@ -69,6 +66,7 @@ local function drawUI()
     term.setCursorPos(2, 4)
     term.write(string.format("Volume:   %d%%", math.floor(volume * 100)))
     
+    -- Song Info
     term.setTextColor(colors.white)
     term.setCursorPos(2, 6)
     term.write(string.format("Track: [%d / %d]", currentSongIdx, #playlist))
@@ -78,6 +76,7 @@ local function drawUI()
     if #songName > w - 4 then songName = songName:sub(1, w - 7) .. "..." end
     term.write(songName)
     
+    -- Status
     term.setCursorPos(2, 9)
     if not isPlaying then
         term.setTextColor(colors.red)
@@ -90,48 +89,60 @@ local function drawUI()
         term.write("[ PLAYING ]")
     end
     
+    -- Controls
     term.setTextColor(colors.white)
     term.setCursorPos(2, 11)
     
     if w < 34 then
+        -- Compact layout
         term.setBackgroundColor(colors.green)
         term.write(" [P]lay/Pause ")
         term.setBackgroundColor(colors.black)
         term.write(" ")
+        
         term.setBackgroundColor(colors.red)
         term.write(" [S]top ")
+        
         term.setCursorPos(2, 13)
         term.setBackgroundColor(colors.cyan)
         term.write(" [N]ext ")
+        
         term.setCursorPos(2, 15)
         term.setBackgroundColor(colors.gray)
         term.write(" [-] Vol ")
         term.setBackgroundColor(colors.black)
         term.write(" ")
+        
         term.setBackgroundColor(colors.lightGray)
         term.setTextColor(colors.black)
         term.write(" [+] Vol ")
     else
+        -- Normal layout
         term.setBackgroundColor(colors.green)
         term.write(" [P]lay/Pause ")
         term.setBackgroundColor(colors.black)
         term.write("  ")
+        
         term.setBackgroundColor(colors.red)
         term.write(" [S]top ")
         term.setBackgroundColor(colors.black)
         term.write("  ")
+        
         term.setBackgroundColor(colors.cyan)
         term.write(" [N]ext ")
+        
         term.setCursorPos(2, 13)
         term.setBackgroundColor(colors.gray)
         term.write(" [-] Vol ")
         term.setBackgroundColor(colors.black)
         term.write("  ")
+        
         term.setBackgroundColor(colors.lightGray)
         term.setTextColor(colors.black)
         term.write(" [+] Vol ")
     end
     
+    -- Quit
     term.setCursorPos(w - 9, h)
     term.setBackgroundColor(colors.red)
     term.setTextColor(colors.white)
@@ -151,25 +162,27 @@ local function uiLoop()
         
         if event == "key" then
             local key = eventData[2]
-            if key == keys.q then exitProgram = true; clearAudioQueue() end
+            if key == keys.q then exitProgram = true; stopAllSpeakers() end
             if key == keys.p then 
                 isPaused = not isPaused; isPlaying = true; needRedraw = true
-                clearAudioQueue()
+                -- ВАЖНО: Убрано stopAllSpeakers() для идеальной паузы
+                if not isPaused then justUnpaused = true end
             end
-            if key == keys.s then isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; clearAudioQueue() end
-            if key == keys.n then skipSong = true; isPlaying = true; needRedraw = true; clearAudioQueue() end
+            if key == keys.s then isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; stopAllSpeakers() end
+            if key == keys.n then skipSong = true; isPlaying = true; needRedraw = true; stopAllSpeakers() end
             if key == keys.minus then volume = math.max(0.0, volume - 0.1); needRedraw = true end
             if key == keys.equals or key == keys.plus then volume = math.min(3.0, volume + 0.1); needRedraw = true end
             
         elseif event == "char" then
             local char = string.lower(eventData[2])
-            if char == "q" then exitProgram = true; clearAudioQueue() end
+            if char == "q" then exitProgram = true; stopAllSpeakers() end
             if char == "p" then 
                 isPaused = not isPaused; isPlaying = true; needRedraw = true
-                clearAudioQueue()
+                -- ВАЖНО: Убрано stopAllSpeakers() для идеальной паузы
+                if not isPaused then justUnpaused = true end
             end
-            if char == "s" then isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; clearAudioQueue() end
-            if char == "n" then skipSong = true; isPlaying = true; needRedraw = true; clearAudioQueue() end
+            if char == "s" then isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; stopAllSpeakers() end
+            if char == "n" then skipSong = true; isPlaying = true; needRedraw = true; stopAllSpeakers() end
             if char == "-" then volume = math.max(0.0, volume - 0.1); needRedraw = true end
             if char == "+" or char == "=" then volume = math.min(3.0, volume + 0.1); needRedraw = true end
             
@@ -179,38 +192,93 @@ local function uiLoop()
                 if y == 11 then
                     if x >= 2 and x <= 15 then 
                         isPaused = not isPaused; isPlaying = true; needRedraw = true
-                        clearAudioQueue()
+                        if not isPaused then justUnpaused = true end
                     end
                     if x >= 17 and x <= 24 then 
-                        isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; clearAudioQueue() 
+                        isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; stopAllSpeakers() 
                     end
                 elseif y == 13 then
                     if x >= 2 and x <= 9 then 
-                        skipSong = true; isPlaying = true; needRedraw = true; clearAudioQueue() 
+                        skipSong = true; isPlaying = true; needRedraw = true; stopAllSpeakers() 
                     end
                 elseif y == 15 then
                     if x >= 2 and x <= 10 then volume = math.max(0.0, volume - 0.1); needRedraw = true end
                     if x >= 12 and x <= 20 then volume = math.min(3.0, volume + 0.1); needRedraw = true end
                 elseif y == h and x >= w - 9 then
-                    exitProgram = true; clearAudioQueue()
+                    exitProgram = true; stopAllSpeakers()
                 end
             else
                 if y == 11 then
                     if x >= 2 and x <= 15 then 
                         isPaused = not isPaused; isPlaying = true; needRedraw = true
-                        clearAudioQueue()
+                        if not isPaused then justUnpaused = true end
                     end
                     if x >= 18 and x <= 25 then 
-                        isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; clearAudioQueue() 
+                        isPlaying = false; isPaused = false; skipSong = true; needRedraw = true; stopAllSpeakers() 
                     end
                     if x >= 28 and x <= 35 then 
-                        skipSong = true; isPlaying = true; needRedraw = true; clearAudioQueue() 
+                        skipSong = true; isPlaying = true; needRedraw = true; stopAllSpeakers() 
                     end
                 elseif y == 13 then
                     if x >= 2 and x <= 10 then volume = math.max(0.0, volume - 0.1); needRedraw = true end
                     if x >= 13 and x <= 21 then volume = math.min(3.0, volume + 0.1); needRedraw = true end
                 elseif y == h and x >= w - 9 then
-                    exitProgram = true; clearAudioQueue()
+                    exitProgram = true; stopAllSpeakers()
+                end
+            end
+        end
+    end
+end
+
+local function sendToSpeaker(spk, buffer, vol)
+    if volume_supported then
+        local ok, res = pcall(spk.playAudio, buffer, vol)
+        if not ok then
+            volume_supported = false
+            local ok2, res2 = pcall(spk.playAudio, buffer)
+            if ok2 then return res2 else return true end
+        end
+        return res
+    else
+        local ok2, res2 = pcall(spk.playAudio, buffer)
+        if ok2 then return res2 else return true end
+    end
+end
+
+local function playAudioChunk(buffer)
+    local accepted = {}
+    local success_count = 0
+    local current_vol = volume
+    
+    while success_count < #speakers do
+        if exitProgram or skipSong or isPaused then return end
+        
+        for i, spk in ipairs(speakers) do
+            if not accepted[i] then
+                local res = sendToSpeaker(spk, buffer, current_vol)
+                if res then
+                    accepted[i] = true
+                    success_count = success_count + 1
+                end
+            end
+        end
+        
+        if success_count < #speakers then
+            local timer = os.startTimer(5.0)
+            while true do
+                local eventData = {os.pullEvent()}
+                local ev = eventData[1]
+                
+                if ev == "speaker_audio_empty" then
+                    os.cancelTimer(timer)
+                    break
+                elseif ev == "timer" and eventData[2] == timer then
+                    return
+                end
+                
+                if exitProgram or skipSong or isPaused then
+                    os.cancelTimer(timer)
+                    return
                 end
             end
         end
@@ -225,51 +293,24 @@ local function audioLoop()
             
             if file then
                 local decoder = dfpwm.make_decoder()
-                clearAudioQueue()
-                sleep(0.1)
+                stopAllSpeakers()
+                sleep(0.3) 
                 
                 while not exitProgram and not skipSong and isPlaying do
                     if isPaused then
-                        -- Во время паузы ждем событий, чтобы не нагружать сервер
-                        local ev, p1 = os.pullEvent()
-                        if ev == "timer" and chunk_timers[p1] then
-                            chunk_timers[p1] = nil
-                            queued_chunks = math.max(0, queued_chunks - 1)
-                        end
+                        sleep(0.1)
                     else
-                        -- Идеальная синхронизация: держим в очереди не больше 2 чанков (1 секунда звука)
-                        while queued_chunks >= 2 do
-                            local ev, p1 = os.pullEvent()
-                            if ev == "timer" and chunk_timers[p1] then
-                                chunk_timers[p1] = nil
-                                queued_chunks = math.max(0, queued_chunks - 1)
-                            end
-                            if isPaused or skipSong or exitProgram then break end
+                        if justUnpaused then
+                            sleep(0.1) -- Уменьшил задержку, чтобы стартовало мягко
+                            justUnpaused = false
                         end
                         
-                        if not isPaused and not skipSong and not exitProgram then
-                            local chunk = file.read(4096) 
-                            if not chunk or chunk == "" then break end
-                            
-                            local buffer = decoder(chunk)
-                            
-                            for _, spk in ipairs(speakers) do
-                                if volume_supported then
-                                    local ok = pcall(spk.playAudio, buffer, volume)
-                                    if not ok then
-                                        volume_supported = false
-                                        pcall(spk.playAudio, buffer)
-                                    end
-                                else
-                                    pcall(spk.playAudio, buffer)
-                                end
-                            end
-                            
-                            -- Запускаем таймер ровно на длину чанка
-                            local tid = os.startTimer(0.512)
-                            chunk_timers[tid] = true
-                            queued_chunks = queued_chunks + 1
-                        end
+                        -- Оптимизированный размер: 8 КБ (1 секунда). Пауза будет срабатывать плавно.
+                        local chunk = file.read(8 * 1024) 
+                        if not chunk or chunk == "" then break end
+                        
+                        local buffer = decoder(chunk)
+                        playAudioChunk(buffer)
                     end
                 end
                 file.close()
@@ -288,7 +329,7 @@ local function audioLoop()
                     sleep(0.1)
                 end
             elseif not isPaused then
-                sleep(0.5)
+                sleep(1.0)
                 currentSongIdx = currentSongIdx + 1
                 if currentSongIdx > #playlist then currentSongIdx = 1 end
                 needRedraw = true
@@ -298,7 +339,7 @@ local function audioLoop()
         end
     end
     
-    clearAudioQueue()
+    stopAllSpeakers()
 end
 
 term.clear()

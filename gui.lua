@@ -1,7 +1,7 @@
 local dfpwm = require("cc.audio.dfpwm")
 
 -- ==========================================
--- УМНАЯ СИСТЕМА ПЕРИФЕРИИ (HOT-PLUG)
+-- УМНАЯ СИСТЕМА ПЕРИФЕРИИ
 -- ==========================================
 local speakers = {}
 
@@ -15,7 +15,8 @@ scanPeripherals()
 
 local function getMonitor()
     local mon = peripheral.find("monitor")
-    if mon then mon.setTextScale(1) end
+    -- ВКЛЮЧАЕМ МАСШТАБ 0.5 ДЛЯ ПОЛУЧЕНИЯ ВЫСОКОГО РАЗРЕШЕНИЯ НА МОНИТОРЕ
+    if mon then pcall(mon.setTextScale, 0.5) end
     return mon
 end
 
@@ -84,6 +85,7 @@ local function stopAllSpeakers()
     for _, spk in ipairs(speakers) do pcall(spk.stop) end
 end
 
+-- Функция рисует UI на КОНКРЕТНОМ экране (term или mon)
 local function drawUIOnTarget(target)
     if not target then return end
     local w, h = target.getSize()
@@ -91,6 +93,7 @@ local function drawUIOnTarget(target)
     target.setBackgroundColor(colors.black)
     target.clear()
     
+    -- Title Bar
     target.setCursorPos(1, 1)
     target.setBackgroundColor(colors.blue)
     target.setTextColor(colors.white)
@@ -99,6 +102,7 @@ local function drawUIOnTarget(target)
     target.setCursorPos(math.floor((w - #title)/2) + 1, 1)
     target.write(title)
     
+    -- Info
     target.setBackgroundColor(colors.black)
     target.setTextColor(colors.gray)
     target.setCursorPos(2, 3)
@@ -107,15 +111,17 @@ local function drawUIOnTarget(target)
     target.setCursorPos(2, 4)
     target.write(string.format("Volume:   %d%%", math.floor(volume * 100)))
     
+    -- Song Info
     target.setTextColor(colors.white)
     target.setCursorPos(2, 6)
     target.write(string.format("Track: [%d / %d]", currentSongIdx, #playlist))
     target.setCursorPos(2, 7)
     target.setTextColor(colors.yellow)
     local songName = playlist[currentSongIdx] or ""
-    if #songName > 24 then songName = songName:sub(1, 21) .. "..." end
+    if #songName > 22 then songName = songName:sub(1, 19) .. "..." end
     target.write(songName)
     
+    -- Status
     target.setCursorPos(2, 9)
     if not isPlaying then
         target.setTextColor(colors.red)
@@ -128,6 +134,7 @@ local function drawUIOnTarget(target)
         target.write("[ PLAYING ]")
     end
     
+    -- Controls Layout
     target.setTextColor(colors.white)
     target.setCursorPos(2, 11)
     target.setBackgroundColor(colors.green)
@@ -154,11 +161,12 @@ local function drawUIOnTarget(target)
     target.setTextColor(colors.black)
     target.write(" [+] Vol ")
     
-    if w >= 38 then
+    -- ОПТИМИЗИРОВАННЫЙ ИНТЕРАКТИВНЫЙ ПЛЕЙЛИСТ (Порог снижен до 35)
+    if w >= 35 then
         target.setBackgroundColor(colors.black)
         target.setTextColor(colors.gray)
         for r = 2, h do
-            target.setCursorPos(28, r)
+            target.setCursorPos(26, r)
             target.write("|")
         end
         
@@ -178,8 +186,8 @@ local function drawUIOnTarget(target)
             local songIdx = playlistOffset + i
             if songIdx <= #playlist then
                 local row = 3 + i
-                target.setCursorPos(30, row)
-                local displayName = playlist[songIdx]:sub(1, w - 36)
+                target.setCursorPos(28, row)
+                local displayName = playlist[songIdx]:sub(1, w - 33)
                 if songIdx == currentSongIdx then
                     target.setTextColor(colors.lime)
                     target.write(string.format("> %02d. %s", songIdx, displayName))
@@ -191,6 +199,7 @@ local function drawUIOnTarget(target)
         end
     end
     
+    -- Quit
     target.setCursorPos(2, h)
     target.setBackgroundColor(colors.red)
     target.setTextColor(colors.white)
@@ -219,6 +228,15 @@ local function scrollPlaylist(dir, screen_h)
     needRedraw = true
 end
 
+-- Автоматически определяет высоту активного экрана с плейлистом для клавиатуры
+local function getPlaylistScreenHeight()
+    local mon = getMonitor()
+    if mon then
+        return select(2, mon.getSize())
+    end
+    return select(2, term.getSize())
+end
+
 local function handleInteraction(x, y, w, h)
     if y == 11 then
         if x >= 2 and x <= 15 then 
@@ -244,7 +262,8 @@ local function handleInteraction(x, y, w, h)
         exitProgram = true; stopAllSpeakers()
     end
     
-    if w >= 38 and x >= 30 then
+    -- Обновлённые хитбоксы кликов по списку песен (x >= 28)
+    if w >= 35 and x >= 28 then
         if y == 2 and x >= w - 5 then
             scrollPlaylist("up", h)
         elseif y == h - 1 and x >= w - 5 then
@@ -267,12 +286,11 @@ local function uiLoop()
         
         if event == "peripheral" or event == "peripheral_detach" then
             scanPeripherals()
+            stopAllSpeakers()
             needRedraw = true
-            -- Не сбрасываем звук тут, синхронизатор сам поймает новую колонку!
             
         elseif event == "key" then
             local key = eventData[2]
-            local screen_h = select(2, term.getSize())
             if key == keys.q then exitProgram = true; stopAllSpeakers() end
             if key == keys.p then 
                 isPaused = not isPaused; isPlaying = true; needRedraw = true
@@ -291,8 +309,8 @@ local function uiLoop()
             end
             if key == keys.minus then volume = math.max(0.0, volume - 0.1); needRedraw = true end
             if key == keys.equals or key == keys.plus then volume = math.min(3.0, volume + 0.1); needRedraw = true end
-            if key == keys.up then scrollPlaylist("up", screen_h) end
-            if key == keys.down then scrollPlaylist("down", screen_h) end
+            if key == keys.up then scrollPlaylist("up", getPlaylistScreenHeight()) end
+            if key == keys.down then scrollPlaylist("down", getPlaylistScreenHeight()) end
             
         elseif event == "mouse_click" then
             local x, y = eventData[3], eventData[4]
@@ -300,7 +318,7 @@ local function uiLoop()
             handleInteraction(x, y, term_w, term_h)
             
         elseif event == "monitor_touch" then
-            local mon = peripheral.find("monitor")
+            local mon = getMonitor()
             if mon then
                 local x, y = eventData[3], eventData[4]
                 local mon_w, mon_h = mon.getSize()
@@ -325,57 +343,42 @@ local function sendToSpeaker(spk, buffer, vol)
     end
 end
 
--- ==========================================
--- ИДЕАЛЬНЫЙ АБСОЛЮТНЫЙ СИНХРОНИЗАТОР
--- ==========================================
 local function playAudioChunk(buffer)
-    local pushed = false
-    while not pushed do
-        -- Обновляем список колонок, вдруг выдернули или вставили провод
-        local current_speakers = speakers 
-        if #current_speakers == 0 then
-            os.sleep(0.5)
-            return
-        end
-        
+    local current_speakers = speakers
+    local accepted = {}
+    local success_count = 0
+    local target_count = #current_speakers
+    local current_vol = volume
+    
+    while success_count < target_count do
         if exitProgram or trackChanged or isPaused then return end
         
-        local all_success = true
-        local any_success = false
-        
-        -- Одновременно кидаем звук во все колонки
-        for _, spk in ipairs(current_speakers) do
-            local success = sendToSpeaker(spk, buffer, volume)
-            if success then 
-                any_success = true 
-            else 
-                all_success = false 
+        for i, spk in ipairs(current_speakers) do
+            if not accepted[i] then
+                local res = sendToSpeaker(spk, buffer, current_vol)
+                if res then
+                    accepted[i] = true
+                    success_count = success_count + 1
+                end
             end
         end
         
-        if all_success then
-            -- Идеально! Все колонки синхронно скушали кусок
-            pushed = true
-            
-        elseif any_success then
-            -- РАССИНХРОН! Кто-то проглотил, кто-то поперхнулся (буфер забит).
-            -- Мгновенно затыкаем ВСЕ колонки и стираем их память.
-            stopAllSpeakers()
-            -- Мы НЕ меняем pushed = true, поэтому цикл тут же попытается
-            -- отправить этот же кусок звука во все пустые колонки заново!
-            
-        else
-            -- Ни одна колонка не приняла. Это нормально, значит буферы у всех полные (8/8).
-            -- Ждем долю секунды, пока освободится место, не замораживая UI.
-            local timer = os.startTimer(0.1)
+        if success_count < target_count then
+            local timer = os.startTimer(2.0) 
             while true do
-                local ev = {os.pullEvent()}
-                if ev[1] == "timer" and ev[2] == timer then
+                local eventData = {os.pullEvent()}
+                local ev = eventData[1]
+                
+                if ev == "speaker_audio_empty" then
+                    os.cancelTimer(timer)
                     break
-                elseif ev[1] == "speaker_audio_empty" then
-                    break -- Место освободилось раньше времени!
-                elseif ev[1] == "peripheral" or ev[1] == "peripheral_detach" then
-                    return -- Отменяем кусок, скан подхватит изменение и мы начнем свежий цикл
+                elseif ev == "timer" and eventData[2] == timer then
+                    return
+                end
+                
+                if exitProgram or trackChanged or isPaused then
+                    os.cancelTimer(timer)
+                    return
                 end
             end
         end
@@ -406,7 +409,12 @@ local function audioLoop()
                         if not chunk or chunk == "" then break end
                         
                         local buffer = decoder(chunk)
-                        playAudioChunk(buffer)
+                        
+                        if #speakers == 0 then
+                            sleep(0.5) 
+                        else
+                            playAudioChunk(buffer)
+                        end
                     end
                 end
                 file.close()
